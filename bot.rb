@@ -1,9 +1,11 @@
-require 'dotenv/load' # To load environment variables from .env
+require 'dotenv/load' # Pour charger les variables d'environnement
 require 'x'
 require 'openai'
 require 'json'
 require 'rufus-scheduler'
+require 'time'
 
+# Initialisation des credentials pour X API
 x_credentials = {
   api_key:              ENV['X_API_KEY'],
   api_key_secret:       ENV['X_API_KEY_SECRET'],
@@ -13,84 +15,110 @@ x_credentials = {
 
 puts x_credentials.inspect
 
-# Initialize an X API client with your OAuth credentials
+# Initialisation du client X API
 x_client = X::Client.new(**x_credentials)
 
-# Get data about yourself
-response = x_client.get("users/me")
-puts response
-
-# Initailize OpenAI
+# Configuration de l'API OpenAI
 OpenAI.configure do |config|
   config.access_token = ENV.fetch("OPENAI_ACCESS_TOKEN")
 end
 
-begin
-  # Generate the main content from OpenAI
-  client = OpenAI::Client.new
-  chatgpt_response = client.chat(parameters: {
-    model: "gpt-4o-mini",
-    messages: [{
-      role: "user",
-      content: "Génère un message de 280 caractères maximum de numérologie pour la date actuelle.  
-        Stp, respecte **280 caractères** et ne dépasse surtout pas cette limite.  
-        Suivre cette structure :  
-        1. 'Date du jour : [JJ/MM/AAAA] => [calcul complet en une ligne, ex. 2+8+1+0+2+0+2+3=18 => 1+8=9]'.  
-        2. 'Le chiffre de la journée est [chiffre calculé]'.  
-        3. Signification détaillée du chiffre en une phrase fluide et concise.  
-        Formate le texte pour qu'il soit fluide, clair et impactant."
-    }]
-  })
+# Scheduler pour lancer à 10h heure française
+scheduler = Rufus::Scheduler.new
 
-  @content = chatgpt_response["choices"][0]["message"]["content"]
-  puts "Contenu principal : #{@content}"
+# Tâche programmée à 10h heure française (UTC+1)
+scheduler.cron '0 9 * * *' do
+  begin
+    # Obtenez la date actuelle et formatez-la
+    current_date = Time.now.getlocal('+01:00').strftime("%d/%m/%Y")
+    puts "Date actuelle générée : #{current_date}"
 
-  # Vérification de la longueur
-  if @content.length > 280
-    puts "Erreur : Le contenu principal dépasse 280 caractères."
-    exit
-  end
+    # Génération du contenu principal
+    client = OpenAI::Client.new
+    loop do
+      chatgpt_response = client.chat(parameters: {
+        model: "gpt-4o-mini",
+        messages: [{
+          role: "user",
+          content: "Génère un message détaillé pour la numérologie du jour en **2000 caractères maximum**.  
+          La date du jour est #{current_date}. Inclure :  
+          1. 'Date du jour : #{current_date} => [calcul complet en une ligne, ex. 2+8+1+0+2+0+2+3=18 => 1+8=9]'.  
+          2. 'Le chiffre de la journée est [chiffre calculé]'.  
+          3. Une analyse approfondie du chiffre, expliquant ses impacts émotionnels, professionnels et spirituels.  
+          4. Des conseils pratiques et spirituels basés sur ce chiffre."
+        }]
+      })
 
-  # Post the main tweet
-  main_post = x_client.post("tweets", { text: @content }.to_json)
-  puts "Tweet principal publié avec succès : #{main_post}"
+      @content = chatgpt_response["choices"][0]["message"]["content"]
+      puts "Contenu principal : #{@content}"
 
-  # Extract tweet ID for threading
-  main_tweet_id = main_post['data']['id']
-
-  # Parse the chiffre du jour
-  chiffre_du_jour = @content.match(/Le chiffre de la journée est (\d+)/)[1].to_i
-
-  # Chiffres de la numérologie à comparer
-  chiffres_numerologie = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 22, 33]
-
-  # Generate thread responses
-  chiffres_numerologie.each do |chiffre|
-    comparaison_response = client.chat(parameters: {
-      model: "gpt-4o-mini",
-      messages: [{
-        role: "user",
-        content: "Compare le chiffre #{chiffre_du_jour} (chiffre du jour) avec le chiffre #{chiffre}.  
-          Fournis une analyse détaillée mais concise (280 caractères maximum) sur leurs énergies respectives et comment elles peuvent interagir.  
-          Sois clair et impactant."
-      }]
-    })
-
-    comparaison_message = comparaison_response["choices"][0]["message"]["content"]
-
-    # Vérification de la longueur
-    if comparaison_message.length > 280
-      comparaison_message = comparaison_message[0..276] + "..."
+      # Vérification de longueur
+      if @content.length <= 2000
+        break
+      else
+        puts "Erreur : Le contenu principal dépasse 2000 caractères. Régénération..."
+      end
     end
 
-    # Post each comparison as a reply in the thread
-    response_post = x_client.post("tweets", {
-      text: comparaison_message,
-      reply: { in_reply_to_tweet_id: main_tweet_id }
-    }.to_json)
+    # Publiez le tweet principal
+    main_post = x_client.post("tweets", { text: @content }.to_json)
+    puts "Tweet principal publié avec succès : #{main_post}"
 
-    puts "Réponse pour le chiffre #{chiffre} publiée : #{response_post}"
+    # Extraire l'ID du tweet principal pour le thread
+    last_tweet_id = main_post['data']['id']
+
+    # Analyse du chiffre du jour
+    chiffre_du_jour = @content.match(/Le chiffre de la journée est (\d+)/)[1].to_i
+
+    # Liste des chiffres à comparer
+    chiffres_numerologie = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 22, 33]
+
+    # Génération des réponses pour chaque chiffre
+    chiffres_numerologie.each do |chiffre|
+      puts "Génération de contenu pour le chiffre #{chiffre}..."
+
+      comparaison_message = nil
+      loop do
+        comparaison_response = client.chat(parameters: {
+          model: "gpt-4o-mini",
+          messages: [{
+            role: "user",
+            content: "Pour le numéro #{chiffre} : avec le chiffre du jour #{chiffre_du_jour}, en numérologie, fournissez une analyse détaillée jusqu'à **2000 caractères**.  
+              Inclure :  
+              1. Les qualités principales du chiffre #{chiffre}.  
+              2. L’effet du chiffre #{chiffre_du_jour} sur ces qualités.  
+              3. Des suggestions pratiques ou spirituelles basées sur cette combinaison.  
+              Structurez la réponse pour qu’elle soit claire et engageante."
+          }]
+        })
+
+        comparaison_message = comparaison_response["choices"][0]["message"]["content"]
+
+        # Vérifiez la longueur
+        if comparaison_message.length <= 2000
+          break
+        else
+          puts "Erreur : La réponse dépasse 2000 caractères. Régénération..."
+        end
+      end
+
+      puts "Message généré : #{comparaison_message}"
+
+      # Publiez la réponse en tant que réponse au dernier tweet
+      response_post = x_client.post("tweets", {
+        text: comparaison_message,
+        reply: { in_reply_to_tweet_id: last_tweet_id }
+      }.to_json)
+
+      puts "Réponse pour le chiffre #{chiffre} publiée : #{response_post}"
+
+      # Mettre à jour l'ID du dernier tweet pour continuer le thread
+      last_tweet_id = response_post['data']['id']
+    end
+  rescue StandardError => e
+    puts "Une erreur s'est produite : #{e.message}"
   end
-rescue StandardError => e
-  puts "Une erreur s'est produite : #{e.message}"
 end
+
+# Gardez le script en cours d'exécution
+scheduler.join

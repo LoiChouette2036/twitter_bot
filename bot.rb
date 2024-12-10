@@ -29,7 +29,8 @@ begin
 
   # Génération du contenu principal
   client = OpenAI::Client.new
-  loop do
+
+  begin
     chatgpt_response = client.chat(parameters: {
       model: "gpt-4o-mini",
       messages: [{
@@ -42,21 +43,31 @@ begin
         4. Des conseils pratiques et spirituels basés sur ce chiffre."
       }]
     })
-
-    @content = chatgpt_response["choices"][0]["message"]["content"]
-    puts "Contenu principal : #{@content}"
-
-    # Vérifiez si le contenu respecte la limite de 2000 caractères
-    if @content.length <= 2000
-      break
-    else
-      puts "Erreur : Le contenu principal dépasse 2000 caractères. Régénération..."
-    end
+  rescue StandardError => e
+    # Identifiez si le problème vient de l'API ChatGPT
+    puts "Une erreur s'est produite lors de l'appel à l'API ChatGPT : #{e.message}" if e.message.include?("Too Many Requests")
+    raise e
   end
 
+  @content = chatgpt_response["choices"][0]["message"]["content"]
+  puts "Contenu principal : #{@content}"
+
   # Publiez le tweet principal
-  main_post = x_client.post("tweets", { text: @content }.to_json)
-  puts "Tweet principal publié avec succès : #{main_post}"
+  begin
+    main_post = x_client.post("tweets", { text: @content }.to_json)
+    # Ajoutez une vérification des limites d'utilisation
+    puts "Tweet principal publié avec succès. Vérifiez vos limites actuelles :"
+    puts "Limites restantes (Twitter/X API): #{main_post.headers['x-rate-limit-remaining']}"
+    puts "Réinitialisation prévue à : #{Time.at(main_post.headers['x-rate-limit-reset'].to_i)}"
+  rescue StandardError => e
+    # Identifiez si le problème vient de l'API Twitter/X
+    puts "Une erreur s'est produite lors de l'appel à l'API Twitter/X : #{e.message}" if e.message.include?("Too Many Requests")
+    raise e
+  end
+
+  # Attendez 60 secondes après la création du tweet principal pour éviter les limites
+  puts "Attente de 60 secondes avant de générer les réponses..."
+  sleep(60)
 
   # Extraire l'ID du tweet principal pour le thread
   last_tweet_id = main_post['data']['id']
@@ -70,9 +81,8 @@ begin
   # Génération des réponses pour chaque chiffre
   chiffres_numerologie.each do |chiffre|
     puts "Génération de contenu pour le chiffre #{chiffre}..."
-
-    comparaison_message = nil
-    loop do
+  
+    begin
       comparaison_response = client.chat(parameters: {
         model: "gpt-4o-mini",
         messages: [{
@@ -85,29 +95,35 @@ begin
             Structurez la réponse pour qu’elle soit claire et engageante."
         }]
       })
-
-      comparaison_message = comparaison_response["choices"][0]["message"]["content"]
-
-      # Vérifiez si le message respecte la limite
-      if comparaison_message.length <= 2000
-        break
-      else
-        puts "Erreur : La réponse dépasse 2000 caractères. Régénération..."
-      end
+    rescue StandardError => e
+      # Identifiez si le problème vient de l'API ChatGPT
+      puts "Une erreur s'est produite lors de l'appel à l'API ChatGPT : #{e.message}" if e.message.include?("Too Many Requests")
+      raise e
     end
-
+  
+    comparaison_message = comparaison_response["choices"][0]["message"]["content"]
     puts "Message généré : #{comparaison_message}"
-
+  
     # Publiez la réponse en tant que réponse au dernier tweet
-    response_post = x_client.post("tweets", {
-      text: comparaison_message,
-      reply: { in_reply_to_tweet_id: last_tweet_id }
-    }.to_json)
-
-    puts "Réponse pour le chiffre #{chiffre} publiée : #{response_post}"
-
+    begin
+      response_post = x_client.post("tweets", {
+        text: comparaison_message,
+        reply: { in_reply_to_tweet_id: last_tweet_id }
+      }.to_json)
+      # Ajoutez une vérification des limites d'utilisation
+      puts "Réponse publiée avec succès. Limites restantes : #{response_post.headers['x-rate-limit-remaining']}"
+    rescue StandardError => e
+      # Identifiez si le problème vient de l'API Twitter/X
+      puts "Une erreur s'est produite lors de l'appel à l'API Twitter/X : #{e.message}" if e.message.include?("Too Many Requests")
+      raise e
+    end
+  
     # Mettre à jour l'ID du dernier tweet pour continuer le thread
     last_tweet_id = response_post['data']['id']
+  
+    # Ajoutez une pause de 60 secondes entre les réponses
+    puts "Attente de 60 secondes avant la prochaine réponse..."
+    sleep(60)
   end
 rescue StandardError => e
   puts "Une erreur s'est produite : #{e.message}"

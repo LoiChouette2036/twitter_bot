@@ -1,21 +1,15 @@
 require 'dotenv/load' # Pour charger les variables d'environnement
-require 'x'
 require 'openai'
 require 'json'
 require 'time'
 
-# Initialisation des credentials pour X API
-x_credentials = {
-  api_key:              ENV['X_API_KEY'],
-  api_key_secret:       ENV['X_API_KEY_SECRET'],
-  access_token:         ENV['X_ACCESS_TOKEN'],
-  access_token_secret:  ENV['X_ACCESS_TOKEN_SECRET'],
-}
+# Définir le chemin du fichier texte dans le dossier courant
+file_path = "./api_results.txt"
 
-puts x_credentials.inspect
-
-# Initialisation du client X API
-x_client = X::Client.new(**x_credentials)
+# Si le fichier n'existe pas, le créer
+unless File.exist?(file_path)
+  File.open(file_path, 'w') {} # Crée un fichier vide
+end
 
 # Configuration de l'API OpenAI
 OpenAI.configure do |config|
@@ -27,9 +21,10 @@ begin
   current_date = Time.now.getlocal('+01:00').strftime("%d/%m/%Y")
   puts "Date actuelle générée : #{current_date}"
 
-  # Génération du contenu principal
+  # Initialiser le client OpenAI
   client = OpenAI::Client.new
 
+  # Génération du contenu principal
   begin
     chatgpt_response = client.chat(parameters: {
       model: "gpt-4o-mini",
@@ -44,44 +39,28 @@ begin
       }]
     })
   rescue StandardError => e
-    # Identifiez si le problème vient de l'API ChatGPT
-    puts "Une erreur s'est produite lors de l'appel à l'API ChatGPT : #{e.message}" if e.message.include?("Too Many Requests")
+    puts "Une erreur s'est produite lors de l'appel à l'API ChatGPT : #{e.message}"
     raise e
   end
 
-  @content = chatgpt_response["choices"][0]["message"]["content"]
-  puts "Contenu principal : #{@content}"
+  main_content = chatgpt_response["choices"][0]["message"]["content"]
+  puts "Contenu principal généré : #{main_content}"
 
-  # Publiez le tweet principal
-  begin
-    main_post = x_client.post("tweets", { text: @content }.to_json)
-    # Ajoutez une vérification des limites d'utilisation
-    puts "Tweet principal publié avec succès. Vérifiez vos limites actuelles :"
-    puts "Limites restantes (Twitter/X API): #{main_post.headers['x-rate-limit-remaining']}"
-    puts "Réinitialisation prévue à : #{Time.at(main_post.headers['x-rate-limit-reset'].to_i)}"
-  rescue StandardError => e
-    # Identifiez si le problème vient de l'API Twitter/X
-    puts "Une erreur s'est produite lors de l'appel à l'API Twitter/X : #{e.message}" if e.message.include?("Too Many Requests")
-    raise e
+  # Écrire le contenu principal dans le fichier texte
+  File.open(file_path, 'a') do |file|
+    file.puts("=== Numerology Log for #{current_date} ===")
+    file.puts(main_content)
+    file.puts("\n") # Saut de ligne après le contenu principal
   end
-
-  # Attendez 60 secondes après la création du tweet principal pour éviter les limites
-  puts "Attente de 60 secondes avant de générer les réponses..."
-  sleep(60)
-
-  # Extraire l'ID du tweet principal pour le thread
-  last_tweet_id = main_post['data']['id']
 
   # Analyse du chiffre du jour
-  chiffre_du_jour = @content.match(/Le chiffre de la journée est (\d+)/)[1].to_i
+  chiffre_du_jour = main_content.match(/Le chiffre de la journée est (\d+)/)[1].to_i
 
-  # Liste des chiffres à comparer
   chiffres_numerologie = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 22, 33]
-
-  # Génération des réponses pour chaque chiffre
   chiffres_numerologie.each do |chiffre|
     puts "Génération de contenu pour le chiffre #{chiffre}..."
-  
+
+    # Appel à l'API OpenAI pour chaque chiffre
     begin
       comparaison_response = client.chat(parameters: {
         model: "gpt-4o-mini",
@@ -96,35 +75,26 @@ begin
         }]
       })
     rescue StandardError => e
-      # Identifiez si le problème vient de l'API ChatGPT
-      puts "Une erreur s'est produite lors de l'appel à l'API ChatGPT : #{e.message}" if e.message.include?("Too Many Requests")
+      puts "Une erreur s'est produite lors de l'appel à l'API ChatGPT : #{e.message}"
       raise e
     end
-  
+
     comparaison_message = comparaison_response["choices"][0]["message"]["content"]
-    puts "Message généré : #{comparaison_message}"
-  
-    # Publiez la réponse en tant que réponse au dernier tweet
-    begin
-      response_post = x_client.post("tweets", {
-        text: comparaison_message,
-        reply: { in_reply_to_tweet_id: last_tweet_id }
-      }.to_json)
-      # Ajoutez une vérification des limites d'utilisation
-      puts "Réponse publiée avec succès. Limites restantes : #{response_post.headers['x-rate-limit-remaining']}"
-    rescue StandardError => e
-      # Identifiez si le problème vient de l'API Twitter/X
-      puts "Une erreur s'est produite lors de l'appel à l'API Twitter/X : #{e.message}" if e.message.include?("Too Many Requests")
-      raise e
+    puts "Message généré pour le chiffre #{chiffre} : #{comparaison_message}"
+
+    # Ajouter le contenu au fichier texte
+    File.open(file_path, 'a') do |file|
+      file.puts("=== Reply for Number #{chiffre} ===")
+      file.puts(comparaison_message)
+      file.puts("\n") # Saut de ligne après chaque réponse
     end
-  
-    # Mettre à jour l'ID du dernier tweet pour continuer le thread
-    last_tweet_id = response_post['data']['id']
-  
-    # Ajoutez une pause de 60 secondes entre les réponses
-    puts "Attente de 60 secondes avant la prochaine réponse..."
-    sleep(60)
   end
+
+  # Fin des logs
+  File.open(file_path, 'a') do |file|
+    file.puts("\n--- End of Log for #{current_date} ---\n")
+  end
+
 rescue StandardError => e
   puts "Une erreur s'est produite : #{e.message}"
 end
